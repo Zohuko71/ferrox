@@ -24,8 +24,8 @@ server:
 # Telemetry
 # ─────────────────────────────────────────
 telemetry:
-  log_level: "${LOG_LEVEL:-info}"    # trace|debug|info|warn|error
-  log_format: "${LOG_FORMAT:-json}"  # json | text
+  log_level: info    # trace|debug|info|warn|error — override with LOG_LEVEL env var
+  log_format: json   # json | text — override with LOG_FORMAT env var
 
   metrics:
     enabled: true
