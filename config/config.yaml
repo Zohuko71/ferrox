@@ -1,0 +1,168 @@
+# ─────────────────────────────────────────
+# Ferrox — example configuration
+# All sensitive values use ${VAR} env var references.
+# Place real keys in a .env file (local dev) or K8s Secret (production).
+# ─────────────────────────────────────────
+
+# ─────────────────────────────────────────
+# Server
+# ─────────────────────────────────────────
+server:
+  host: "0.0.0.0"
+  port: 8080
+  graceful_shutdown_timeout_secs: 30
+  max_request_body_bytes: 10485760   # 10 MB
+
+  # Split timeouts — do NOT use a single flat timeout for LLM streams.
+  # Reasoning models can be slow to start but actively stream for minutes.
+  timeouts:
+    connect_secs: 10      # TCP + TLS handshake to provider
+    ttfb_secs: 60         # max wait for first SSE chunk (reasoning models can be slow)
+    idle_secs: 30         # max silence between consecutive SSE chunks
+
+# ─────────────────────────────────────────
+# Telemetry
+# ─────────────────────────────────────────
+telemetry:
+  log_level: "${LOG_LEVEL:-info}"    # trace|debug|info|warn|error
+  log_format: "${LOG_FORMAT:-json}"  # json | text
+
+  metrics:
+    enabled: true
+    path: "/metrics"
+
+  tracing:
+    enabled: "${OTEL_ENABLED:-false}"
+    otlp_endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+    service_name: "ferrox"
+    service_version: "0.1.0"
+    sample_rate: 1.0
+
+# ─────────────────────────────────────────
+# Defaults (applied to all providers unless overridden)
+# ─────────────────────────────────────────
+defaults:
+  timeouts:
+    connect_secs: 10
+    ttfb_secs: 60
+    idle_secs: 30
+  retry:
+    max_attempts: 3
+    initial_backoff_ms: 100
+    max_backoff_ms: 2000
+    jitter: true
+  circuit_breaker:
+    failure_threshold: 5
+    success_threshold: 2
+    recovery_timeout_secs: 30
+
+# ─────────────────────────────────────────
+# Providers
+# Multiple entries of the same type = multiple API keys or base URLs
+# ─────────────────────────────────────────
+providers:
+  - name: anthropic-primary
+    type: anthropic
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "https://api.anthropic.com"
+    timeouts:
+      connect_secs: 10
+      ttfb_secs: 60
+      idle_secs: 30
+    retry:
+      max_attempts: 2
+    circuit_breaker:
+      failure_threshold: 3
+
+  - name: anthropic-secondary        # second API key → doubles rate limit budget
+    type: anthropic
+    api_key: "${ANTHROPIC_API_KEY_2:-placeholder}"
+    base_url: "https://api.anthropic.com"
+
+  - name: openai-primary
+    type: openai
+    api_key: "${OPENAI_API_KEY:-placeholder}"
+    base_url: "https://api.openai.com"
+
+  - name: gemini-primary
+    type: gemini
+    api_key: "${GEMINI_API_KEY:-placeholder}"
+    base_url: "https://generativelanguage.googleapis.com"
+
+  - name: bedrock-primary
+    type: bedrock
+    region: "${AWS_REGION:-us-east-1}"
+    # No api_key — uses AWS credential chain (env vars, instance role, IRSA)
+
+# ─────────────────────────────────────────
+# Model routing
+# Each alias maps to a RoutePool with targets + optional fallback chain
+# ─────────────────────────────────────────
+models:
+  - alias: "claude-sonnet"
+    routing:
+      strategy: weighted             # round_robin | weighted | failover | random
+      targets:
+        - provider: anthropic-primary
+          model_id: "claude-sonnet-4-20250514"
+          weight: 70
+        - provider: anthropic-secondary
+          model_id: "claude-sonnet-4-20250514"
+          weight: 30
+      fallback:
+        - provider: bedrock-primary
+          model_id: "anthropic.claude-3-5-sonnet-20241022-v2:0"
+
+  - alias: "claude-opus"
+    routing:
+      strategy: failover
+      targets:
+        - provider: anthropic-primary
+          model_id: "claude-opus-4-20250514"
+      fallback:
+        - provider: bedrock-primary
+          model_id: "anthropic.claude-opus-4-5:0"
+
+  - alias: "claude-haiku"
+    routing:
+      strategy: round_robin
+      targets:
+        - provider: anthropic-primary
+          model_id: "claude-haiku-4-5-20251001"
+        - provider: anthropic-secondary
+          model_id: "claude-haiku-4-5-20251001"
+
+  - alias: "gpt-4o"
+    routing:
+      strategy: failover
+      targets:
+        - provider: openai-primary
+          model_id: "gpt-4o"
+      fallback: []
+
+  - alias: "gemini-flash"
+    routing:
+      strategy: failover
+      targets:
+        - provider: gemini-primary
+          model_id: "gemini-2.5-flash-lite"
+
+# ─────────────────────────────────────────
+# Virtual keys (inbound auth)
+# ─────────────────────────────────────────
+virtual_keys:
+  - key: "${PROXY_KEY_TOKENBANK:-sk-proxy-dev-key}"
+    name: "tokenbank-service"
+    allowed_models: ["*"]             # wildcard = all aliases
+    rate_limit:
+      requests_per_minute: 600
+      burst: 100
+
+  - key: "${PROXY_KEY_APP:-sk-proxy-app-key}"
+    name: "my-app"
+    allowed_models:
+      - "claude-sonnet"
+      - "gpt-4o"
+    rate_limit:
+      requests_per_minute: 120
+      burst: 20

@@ -1,0 +1,102 @@
+# Ferrox
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Build](https://github.com/shaharia-lab/ferrox/actions/workflows/ci.yml/badge.svg)](https://github.com/shaharia-lab/ferrox/actions)
+
+Ferrox is a stateless, horizontally-scalable LLM API gateway written in Rust. It exposes an OpenAI-compatible API and routes requests to Anthropic, OpenAI, Gemini, and AWS Bedrock.
+
+## Features
+
+- **OpenAI-compatible API** - drop-in replacement; no client-side changes needed
+- **Multi-provider routing** - round-robin, weighted, failover, and random strategies
+- **Fallback chains** - automatic failover to backup providers on failure
+- **Circuit breakers** - lock-free, per-provider; prevents cascading failures
+- **Rate limiting** - per-key token bucket; burst-aware
+- **Virtual keys** - issue scoped API keys with per-model access control
+- **Streaming** - full SSE pass-through for all providers
+- **Observability** - Prometheus metrics, structured JSON logs, OpenTelemetry tracing
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client -->|Bearer token| Auth
+    Auth -->|RequestContext| Router
+
+    subgraph Ferrox
+        Auth[Auth Middleware]
+        Router[Model Router]
+        CB[Circuit Breaker]
+        RateLimit[Rate Limiter]
+        Auth --> RateLimit
+        Router --> CB
+    end
+
+    CB -->|primary| Anthropic
+    CB -->|primary| OpenAI
+    CB -->|primary| Gemini
+    CB -->|fallback| Bedrock[AWS Bedrock]
+
+    Ferrox --> Prometheus
+    Ferrox --> OTLP[OTLP Collector]
+```
+
+## Quick Start
+
+```bash
+# 1. Copy and edit the example config
+cp config/config.yaml config/local.yaml
+
+# 2. Set your API keys
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
+
+# 3. Run
+LLM_PROXY_CONFIG=config/local.yaml cargo run --release
+```
+
+Send a request:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-proxy-dev-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+## Docker
+
+```bash
+docker compose up
+```
+
+Starts Ferrox + Prometheus + Grafana + Jaeger + OTEL Collector.
+
+## Documentation
+
+### User guides
+
+| Guide | Description |
+|---|---|
+| [Quick Start](docs/user/quickstart.md) | Get running in 5 minutes |
+| [Configuration](docs/user/configuration.md) | Full config reference |
+| [Providers](docs/user/providers.md) | Anthropic, OpenAI, Gemini, Bedrock setup |
+| [Routing](docs/user/routing.md) | Strategies, failover, circuit breakers |
+| [Virtual Keys](docs/user/virtual-keys.md) | Auth, rate limits, model access |
+| [API Reference](docs/user/api-reference.md) | Endpoints and request/response formats |
+| [Observability](docs/user/observability.md) | Metrics, tracing, logging |
+
+### Developer guides
+
+| Guide | Description |
+|---|---|
+| [Architecture](docs/developer/architecture.md) | System design and request flow |
+| [Development](docs/developer/development.md) | Build, test, contribute |
+| [Deployment](docs/developer/deployment.md) | Docker and Kubernetes |
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,198 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ferrox Configuration",
+  "description": "Configuration file for the Ferrox LLM API gateway. String values may contain ${VAR} or ${VAR:-default} environment variable references.",
+  "type": "object",
+  "required": ["providers", "models", "virtual_keys"],
+  "additionalProperties": false,
+  "properties": {
+    "server": { "$ref": "#/definitions/ServerConfig" },
+    "telemetry": { "$ref": "#/definitions/TelemetryConfig" },
+    "defaults": { "$ref": "#/definitions/DefaultsConfig" },
+    "providers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ProviderConfig" },
+      "minItems": 1
+    },
+    "models": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ModelConfig" },
+      "minItems": 1
+    },
+    "virtual_keys": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/VirtualKeyConfig" }
+    }
+  },
+  "definitions": {
+    "ServerConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": { "type": "string", "default": "0.0.0.0" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8080 },
+        "graceful_shutdown_timeout_secs": { "type": "integer", "minimum": 0, "default": 30 },
+        "max_request_body_bytes": { "type": "integer", "minimum": 0, "default": 10485760 },
+        "timeouts": { "$ref": "#/definitions/TimeoutsConfig" }
+      }
+    },
+    "TimeoutsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connect_secs": { "type": "integer", "minimum": 0, "default": 10 },
+        "ttfb_secs": { "type": "integer", "minimum": 0, "default": 60 },
+        "idle_secs": { "type": "integer", "minimum": 0, "default": 30 }
+      }
+    },
+    "TelemetryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "log_level": {
+          "type": "string",
+          "enum": ["trace", "debug", "info", "warn", "error"],
+          "default": "info"
+        },
+        "log_format": {
+          "type": "string",
+          "enum": ["json", "text"],
+          "default": "json"
+        },
+        "metrics": { "$ref": "#/definitions/MetricsConfig" },
+        "tracing": { "$ref": "#/definitions/TracingConfig" }
+      }
+    },
+    "MetricsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "path": { "type": "string", "default": "/metrics" }
+      }
+    },
+    "TracingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": ["boolean", "string"], "default": false },
+        "otlp_endpoint": { "type": "string", "default": "http://otel-collector:4317" },
+        "service_name": { "type": "string", "default": "ferrox" },
+        "service_version": { "type": "string", "default": "0.1.0" },
+        "sample_rate": { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 1.0 }
+      }
+    },
+    "DefaultsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeouts": { "$ref": "#/definitions/TimeoutsConfig" },
+        "retry": { "$ref": "#/definitions/RetryConfig" },
+        "circuit_breaker": { "$ref": "#/definitions/CircuitBreakerConfig" }
+      }
+    },
+    "RetryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "default": 3 },
+        "initial_backoff_ms": { "type": "integer", "minimum": 0, "default": 100 },
+        "max_backoff_ms": { "type": "integer", "minimum": 0, "default": 2000 },
+        "jitter": { "type": "boolean", "default": true }
+      }
+    },
+    "CircuitBreakerConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "failure_threshold": { "type": "integer", "minimum": 1, "default": 5 },
+        "success_threshold": { "type": "integer", "minimum": 1, "default": 2 },
+        "recovery_timeout_secs": { "type": "integer", "minimum": 0, "default": 30 }
+      }
+    },
+    "ProviderConfig": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "gemini", "bedrock"]
+        },
+        "api_key": { "type": "string" },
+        "base_url": { "type": "string", "format": "uri" },
+        "region": { "type": "string" },
+        "timeouts": { "$ref": "#/definitions/TimeoutsConfig" },
+        "retry": { "$ref": "#/definitions/RetryConfig" },
+        "circuit_breaker": { "$ref": "#/definitions/CircuitBreakerConfig" }
+      }
+    },
+    "RoutingStrategy": {
+      "type": "string",
+      "enum": ["round_robin", "weighted", "failover", "random"]
+    },
+    "TargetConfig": {
+      "type": "object",
+      "required": ["provider", "model_id"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model_id": { "type": "string", "minLength": 1 },
+        "weight": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "RoutingConfig": {
+      "type": "object",
+      "required": ["strategy", "targets"],
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "$ref": "#/definitions/RoutingStrategy" },
+        "targets": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TargetConfig" },
+          "minItems": 1
+        },
+        "fallback": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/TargetConfig" },
+          "default": []
+        }
+      }
+    },
+    "ModelConfig": {
+      "type": "object",
+      "required": ["alias", "routing"],
+      "additionalProperties": false,
+      "properties": {
+        "alias": { "type": "string", "minLength": 1 },
+        "routing": { "$ref": "#/definitions/RoutingConfig" }
+      }
+    },
+    "RateLimitConfig": {
+      "type": "object",
+      "required": ["requests_per_minute", "burst"],
+      "additionalProperties": false,
+      "properties": {
+        "requests_per_minute": { "type": "integer", "minimum": 0 },
+        "burst": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "VirtualKeyConfig": {
+      "type": "object",
+      "required": ["key", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "allowed_models": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "rate_limit": { "$ref": "#/definitions/RateLimitConfig" }
+      }
+    }
+  }
+}
