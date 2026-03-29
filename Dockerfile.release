@@ -1,0 +1,32 @@
+# Minimal runtime image built from pre-compiled binaries.
+# Used by the CI release workflow — avoids slow QEMU ARM64 recompilation.
+# Both ferrox-amd64 and ferrox-arm64 must be present in the build context.
+# Docker Buildx sets TARGETARCH automatically (amd64 or arm64) per platform.
+# ubuntu:24.04 matches the glibc version of ubuntu-latest GitHub Actions runners
+# where the release binaries are compiled (glibc 2.39).
+FROM ubuntu:24.04
+
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r ferrox && useradd -r -g ferrox ferrox
+
+WORKDIR /app
+
+COPY ferrox-${TARGETARCH} ./ferrox
+COPY config/config.yaml ./config/config.yaml
+
+RUN chmod +x ./ferrox
+
+USER ferrox
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+    CMD wget -qO- http://localhost:8080/healthz || exit 1
+
+ENTRYPOINT ["./ferrox"]
