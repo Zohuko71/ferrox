@@ -1,24 +1,24 @@
 # ── Stage 1: Build ─────────────────────────────────────────────────────────────
 FROM rust:1.94-slim-bookworm AS builder
 
-# Build dependencies: OpenSSL (reqwest native-tls) + protobuf (opentelemetry-otlp/tonic)
+# protobuf-compiler required by opentelemetry-otlp/tonic build script
+# git required by build.rs (git rev-parse for version embedding)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
     protobuf-compiler \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Cache dependency compilation layer — copy manifests first, stub src, build deps only.
-COPY Cargo.toml Cargo.lock ./
+# Cache dependency compilation layer — copy manifests + build script first, stub src.
+# build.rs runs here too; GIT_SHA will be "unknown" for the dep-cache layer, which is fine.
+COPY Cargo.toml Cargo.lock build.rs ./
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
     && cargo build --release \
     && rm -rf src
 
-# Build real binary
+# Copy real source and rebuild only ferrox (deps already cached above)
 COPY src ./src
-# Touch main.rs so cargo knows the source changed
 RUN touch src/main.rs \
     && cargo build --release
 
@@ -27,7 +27,6 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3 \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
@@ -43,7 +42,6 @@ USER ferrox
 
 EXPOSE 8080
 
-# wget is already available; use it for the health check
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
     CMD wget -qO- http://localhost:8080/healthz || exit 1
 
