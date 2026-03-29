@@ -55,7 +55,7 @@ pub async fn chat_completions(
                 let key_name = ctx.key_name.clone();
 
                 ACTIVE_STREAMS
-                    .with_label_values(&[&provider_name, &alias])
+                    .with_label_values(&[provider_name.as_str(), alias.as_str()])
                     .inc();
 
                 // Clone all labels needed by the two closures (map + chain)
@@ -84,12 +84,20 @@ pub async fn chat_completions(
                     .chain(futures::stream::once(async move {
                         let latency = start.elapsed().as_secs_f64();
                         REQUESTS_TOTAL
-                            .with_label_values(&[&p2, &a2, &m2, "200", &k2])
+                            .with_label_values(&[
+                                p2.as_str(),
+                                a2.as_str(),
+                                m2.as_str(),
+                                "200",
+                                k2.as_str(),
+                            ])
                             .inc();
                         REQUEST_DURATION_SECONDS
-                            .with_label_values(&[&p2, &a2, "200"])
+                            .with_label_values(&[p2.as_str(), a2.as_str(), "200"])
                             .observe(latency);
-                        ACTIVE_STREAMS.with_label_values(&[&p2, &a2]).dec();
+                        ACTIVE_STREAMS
+                            .with_label_values(&[p2.as_str(), a2.as_str()])
+                            .dec();
                         tracing::info!(
                             model_alias = %a2,
                             provider = %p2,
@@ -128,15 +136,15 @@ pub async fn chat_completions(
                 }
                 REQUESTS_TOTAL
                     .with_label_values(&[
-                        &provider_name,
-                        &req.model,
-                        &model_id,
+                        provider_name.as_str(),
+                        req.model.as_str(),
+                        model_id.as_str(),
                         "200",
-                        &ctx.key_name,
+                        ctx.key_name.as_str(),
                     ])
                     .inc();
                 REQUEST_DURATION_SECONDS
-                    .with_label_values(&[&provider_name, &req.model, "200"])
+                    .with_label_values(&[provider_name.as_str(), req.model.as_str(), "200"])
                     .observe(latency);
 
                 tracing::info!(
@@ -247,7 +255,7 @@ async fn dispatch_non_stream(
             Ok(resp) => {
                 fallback.circuit_breaker.record_success();
                 FALLBACK_TOTAL
-                    .with_label_values(&[&pool.alias, "", &provider_name])
+                    .with_label_values(&[pool.alias.as_str(), "", provider_name.as_str()])
                     .inc();
                 tracing::info!(
                     provider = %provider_name,
@@ -326,7 +334,7 @@ async fn dispatch_stream(
             Ok(stream) => {
                 fallback.circuit_breaker.record_success();
                 FALLBACK_TOTAL
-                    .with_label_values(&[&pool.alias, "", &provider_name])
+                    .with_label_values(&[pool.alias.as_str(), "", provider_name.as_str()])
                     .inc();
                 tracing::info!(
                     provider = %provider_name,

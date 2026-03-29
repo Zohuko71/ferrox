@@ -86,7 +86,11 @@ impl RoutePool {
         let target = &self.targets[idx];
 
         ROUTING_TARGET_SELECTED
-            .with_label_values(&[&self.alias, target.provider.name(), self.strategy_name])
+            .with_label_values(&[
+                self.alias.as_str(),
+                target.provider.name(),
+                self.strategy_name,
+            ])
             .inc();
 
         Some(target)

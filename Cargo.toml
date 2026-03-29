@@ -50,7 +50,7 @@ opentelemetry_sdk = { version = "0.22", features = ["rt-tokio", "trace"] }
 tracing-opentelemetry = "0.23"
 
 # Prometheus
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
