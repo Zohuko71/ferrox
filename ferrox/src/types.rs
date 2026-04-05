@@ -16,6 +16,17 @@ pub struct ChatCompletionRequest {
     pub tool_choice: Option<serde_json::Value>,
     /// Convenience field — system prompt (alternative to a system message)
     pub system: Option<String>,
+    /// Extra HTTP headers to forward to the upstream provider (e.g. `anthropic-beta`).
+    /// Never serialised — carried out-of-band through the pipeline.
+    #[serde(skip)]
+    pub extra_headers: HashMap<String, String>,
+    /// Original Anthropic-format request body.  Set by the `/anthropic/v1/messages`
+    /// handler so the Anthropic provider adapter can forward it verbatim (only
+    /// overriding `model` and `stream`), preserving every field the client sent —
+    /// `cache_control`, `thinking`, `service_tier`, `output_config`, tool attributes, etc.
+    /// Never serialised — carried out-of-band.
+    #[serde(skip)]
+    pub raw_anthropic_body: Option<serde_json::Value>,
     /// Catch-all for unknown fields (pass-through)
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -209,6 +220,8 @@ mod tests {
             tools: None,
             tool_choice: None,
             system: None,
+            extra_headers: HashMap::new(),
+            raw_anthropic_body: None,
             extra: HashMap::new(),
         }
     }

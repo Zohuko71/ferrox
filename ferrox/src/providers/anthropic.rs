@@ -66,25 +66,26 @@ impl ProviderAdapter for AnthropicAdapter {
         req: &ChatCompletionRequest,
         model_id: &str,
     ) -> Result<ChatCompletionResponse, ProxyError> {
-        let body = build_request_body(req, model_id, false);
+        let extras = extract_anthropic_extras(req);
+        let body = prepare_body(req, model_id, false, &extras);
         let url = format!("{}/v1/messages", self.base_url);
 
-        let resp = self
+        let mut builder = self
             .client
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    ProxyError::UpstreamTimeout(e.to_string())
-                } else {
-                    ProxyError::HttpClientError(e)
-                }
-            })?;
+            .header("content-type", "application/json");
+        for (k, v) in &req.extra_headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+        let resp = builder.json(&body).send().await.map_err(|e| {
+            if e.is_timeout() {
+                ProxyError::UpstreamTimeout(e.to_string())
+            } else {
+                ProxyError::HttpClientError(e)
+            }
+        })?;
 
         let status = resp.status().as_u16();
         if status >= 400 {
@@ -106,25 +107,26 @@ impl ProviderAdapter for AnthropicAdapter {
         req: &ChatCompletionRequest,
         model_id: &str,
     ) -> Result<ProviderStream, ProxyError> {
-        let body = build_request_body(req, model_id, true);
+        let extras = extract_anthropic_extras(req);
+        let body = prepare_body(req, model_id, true, &extras);
         let url = format!("{}/v1/messages", self.base_url);
 
-        let resp = self
+        let mut builder = self
             .client
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    ProxyError::UpstreamTimeout(e.to_string())
-                } else {
-                    ProxyError::HttpClientError(e)
-                }
-            })?;
+            .header("content-type", "application/json");
+        for (k, v) in &req.extra_headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+        let resp = builder.json(&body).send().await.map_err(|e| {
+            if e.is_timeout() {
+                ProxyError::UpstreamTimeout(e.to_string())
+            } else {
+                ProxyError::HttpClientError(e)
+            }
+        })?;
 
         let status = resp.status().as_u16();
         if status >= 400 {
@@ -167,6 +169,15 @@ struct AnthropicRequest {
     tools: Option<Vec<AnthropicTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<Value>,
+    /// Extended thinking configuration (Anthropic-native only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Value>,
+}
+
+/// Anthropic-specific extras extracted from `ChatCompletionRequest`.
+struct AnthropicExtras {
+    /// Extended thinking config from `_anthropic_thinking` extra key.
+    thinking: Option<Value>,
 }
 
 #[derive(Serialize, Clone)]
@@ -217,10 +228,57 @@ struct AnthropicTool {
     input_schema: Value,
 }
 
+/// Extract Anthropic-specific extras that were injected into `ChatCompletionRequest`
+/// by the Anthropic-native handler.
+fn extract_anthropic_extras(req: &ChatCompletionRequest) -> AnthropicExtras {
+    let thinking = req.extra.get("_anthropic_thinking").cloned();
+    AnthropicExtras { thinking }
+}
+
+/// Return the body to send to the Anthropic API.
+///
+/// If the request originated from the Anthropic-native endpoint
+/// (`raw_anthropic_body` is set), forward it verbatim — only `model` and
+/// `stream` are overridden so the gateway's alias resolution and streaming
+/// decision are respected.  This preserves every field the client sent:
+/// `cache_control`, `thinking`, `service_tier`, `output_config`, tool
+/// attributes (`eager_input_streaming`, `strict`, `defer_loading`), etc.
+///
+/// Otherwise (request came through the OpenAI-compatible endpoint and was
+/// routed to the Anthropic provider) fall back to the field-by-field
+/// conversion.
+fn prepare_body(
+    req: &ChatCompletionRequest,
+    model_id: &str,
+    stream: bool,
+    extras: &AnthropicExtras,
+) -> serde_json::Value {
+    if let Some(raw) = &req.raw_anthropic_body {
+        let mut body = raw.clone();
+        if let Some(obj) = body.as_object_mut() {
+            // Override model alias with the resolved provider model ID.
+            obj.insert("model".to_string(), serde_json::json!(model_id));
+            // Set stream flag from the gateway's decision (not the client's raw value).
+            if stream {
+                obj.insert("stream".to_string(), serde_json::json!(true));
+            } else {
+                obj.remove("stream");
+            }
+            // Remove internal-only keys that were injected for pipeline carry-through.
+            obj.remove("betas"); // forwarded as header, not body
+        }
+        return body;
+    }
+
+    // Fallback: convert from internal OpenAI format.
+    serde_json::to_value(build_request_body(req, model_id, stream, extras)).unwrap_or_default()
+}
+
 fn build_request_body(
     req: &ChatCompletionRequest,
     model_id: &str,
     stream: bool,
+    extras: &AnthropicExtras,
 ) -> AnthropicRequest {
     let system = req.system_message();
 
@@ -262,7 +320,37 @@ fn build_request_body(
         top_p: req.top_p,
         stop_sequences,
         tools,
-        tool_choice: req.tool_choice.clone(),
+        tool_choice: req
+            .tool_choice
+            .as_ref()
+            .map(openai_tool_choice_to_anthropic),
+        thinking: extras.thinking.clone(),
+    }
+}
+
+/// Convert an OpenAI-format `tool_choice` value to the Anthropic format.
+///
+/// OpenAI strings: `"auto"` → `{"type":"auto"}`, `"required"` → `{"type":"any"}`,
+/// `"none"` → `{"type":"none"}`.
+/// OpenAI object: `{"type":"function","function":{"name":"foo"}}` → `{"type":"tool","name":"foo"}`.
+fn openai_tool_choice_to_anthropic(tc: &Value) -> Value {
+    match tc {
+        Value::String(s) => match s.as_str() {
+            "auto" => serde_json::json!({"type": "auto"}),
+            "required" => serde_json::json!({"type": "any"}),
+            "none" => serde_json::json!({"type": "none"}),
+            other => serde_json::json!({"type": other}),
+        },
+        Value::Object(_) => {
+            // OpenAI: {"type": "function", "function": {"name": "foo"}}
+            // Anthropic: {"type": "tool", "name": "foo"}
+            if let Some(name) = tc.pointer("/function/name").and_then(|v| v.as_str()) {
+                serde_json::json!({"type": "tool", "name": name})
+            } else {
+                tc.clone()
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -273,16 +361,39 @@ fn convert_message(msg: &ChatMessage) -> AnthropicMessage {
     };
 
     let content = if let Some(tool_calls) = &msg.tool_calls {
-        // Assistant message with tool calls
-        let parts: Vec<AnthropicPart> = tool_calls
-            .iter()
-            .map(|tc| AnthropicPart::ToolUse {
+        // Assistant message with tool calls — include any text content first,
+        // then one ToolUse block per tool call.
+        let mut parts: Vec<AnthropicPart> = Vec::new();
+
+        // Prepend text content if present
+        if let Some(msg_content) = &msg.content {
+            let text = match msg_content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Parts(ps) => ps
+                    .iter()
+                    .filter_map(|p| {
+                        if let ContentPart::Text { text } = p {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+            };
+            if !text.is_empty() {
+                parts.push(AnthropicPart::Text { text });
+            }
+        }
+
+        for tc in tool_calls {
+            parts.push(AnthropicPart::ToolUse {
                 id: tc.id.clone(),
                 name: tc.function.name.clone(),
                 input: serde_json::from_str(&tc.function.arguments)
                     .unwrap_or(serde_json::json!({})),
-            })
-            .collect();
+            });
+        }
         AnthropicContent::Parts(parts)
     } else if let Some(tool_call_id) = &msg.tool_call_id {
         // Tool result message
