@@ -45,6 +45,11 @@ fn proxy_error_to_anthropic_response(e: &ProxyError) -> Response {
             "rate_limit_error",
             msg.clone(),
         ),
+        ProxyError::BudgetExceeded(msg) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            msg.clone(),
+        ),
         ProxyError::CircuitOpen(msg) => {
             // 529 is Anthropic's "overloaded" status; use BAD_GATEWAY as the closest standard code.
             (StatusCode::BAD_GATEWAY, "overloaded_error", msg.clone())
@@ -260,6 +265,20 @@ pub async fn anthropic_messages(
                         completion_tokens: usage.completion_tokens,
                         latency_ms: Some((latency * 1000.0) as u64),
                     });
+
+                    // Reconcile budget reservation with actual usage
+                    if let (Some(ref cid), Some(ref period)) = (&ctx.client_id, &ctx.budget_period)
+                    {
+                        state
+                            .budget_enforcer
+                            .reconcile_tokens(
+                                &cid.to_string(),
+                                period,
+                                ctx.budget_reserved_tokens,
+                                usage.prompt_tokens + usage.completion_tokens,
+                            )
+                            .await;
+                    }
                 }
                 REQUESTS_TOTAL
                     .with_label_values(&[
@@ -315,7 +334,7 @@ fn http_status_for_error(e: &ProxyError) -> u16 {
         ProxyError::Unauthorized(_) => 401,
         ProxyError::Forbidden(_) => 403,
         ProxyError::ModelNotFound(_) => 404,
-        ProxyError::RateLimited(_) => 429,
+        ProxyError::RateLimited(_) | ProxyError::BudgetExceeded(_) => 429,
         ProxyError::CircuitOpen(_) | ProxyError::ProviderError { .. } => 502,
         ProxyError::UpstreamTimeout(_) => 504,
         _ => 500,
@@ -327,7 +346,7 @@ fn error_type_label(e: &ProxyError) -> &'static str {
         ProxyError::Unauthorized(_) => "unauthorized",
         ProxyError::Forbidden(_) => "forbidden",
         ProxyError::ModelNotFound(_) => "model_not_found",
-        ProxyError::RateLimited(_) => "rate_limited",
+        ProxyError::RateLimited(_) | ProxyError::BudgetExceeded(_) => "rate_limited",
         ProxyError::CircuitOpen(_) => "circuit_open",
         ProxyError::ProviderError { .. } => "provider_error",
         ProxyError::UpstreamTimeout(_) => "upstream_timeout",

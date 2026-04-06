@@ -204,6 +204,15 @@ pub struct RequestContext {
     /// UUID of the authenticated client (from JWT `sub` or ferrox claims).
     /// `None` for static virtual keys (which have no control-plane identity).
     pub client_id: Option<Uuid>,
+    /// Token budget from JWT claims.  `None` means unlimited.
+    /// Used by handlers for post-response Redis budget recording.
+    #[allow(dead_code)]
+    pub token_budget: Option<i64>,
+    /// Budget period from JWT claims ("daily" or "monthly").
+    pub budget_period: Option<String>,
+    /// Tokens reserved in the pre-request budget check.
+    /// Used by handlers for post-response reconciliation.
+    pub budget_reserved_tokens: u32,
 }
 
 #[cfg(test)]
