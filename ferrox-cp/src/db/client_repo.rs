@@ -29,16 +29,21 @@ impl<'a> ClientRepository<'a> {
         rpm: i32,
         burst: i32,
         token_ttl_seconds: i32,
+        token_budget: Option<i64>,
+        budget_period: Option<&str>,
     ) -> Result<Client, RepoError> {
         let client = sqlx::query_as::<_, Client>(
             r#"
             INSERT INTO clients
-                (name, description, key_prefix, api_key_hash, allowed_models, rpm, burst, token_ttl_seconds)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (name, description, key_prefix, api_key_hash, allowed_models, rpm, burst,
+                 token_ttl_seconds, token_budget, budget_period, budget_reset_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    CASE WHEN $9 IS NOT NULL THEN now() ELSE NULL END)
             RETURNING
                 id, name, description, key_prefix, api_key_hash,
                 allowed_models, rpm, burst, token_ttl_seconds,
-                active, created_at, revoked_at
+                active, created_at, revoked_at,
+                token_budget, budget_period, budget_reset_at
             "#,
         )
         .bind(name)
@@ -49,6 +54,8 @@ impl<'a> ClientRepository<'a> {
         .bind(rpm)
         .bind(burst)
         .bind(token_ttl_seconds)
+        .bind(token_budget)
+        .bind(budget_period)
         .fetch_one(self.db)
         .await
         .map_err(|e| {
@@ -68,7 +75,8 @@ impl<'a> ClientRepository<'a> {
             r#"
             SELECT id, name, description, key_prefix, api_key_hash,
                    allowed_models, rpm, burst, token_ttl_seconds,
-                   active, created_at, revoked_at
+                   active, created_at, revoked_at,
+                token_budget, budget_period, budget_reset_at
             FROM clients
             WHERE id = $1
             "#,
@@ -90,7 +98,8 @@ impl<'a> ClientRepository<'a> {
             r#"
             SELECT id, name, description, key_prefix, api_key_hash,
                    allowed_models, rpm, burst, token_ttl_seconds,
-                   active, created_at, revoked_at
+                   active, created_at, revoked_at,
+                token_budget, budget_period, budget_reset_at
             FROM clients
             WHERE active = true
               AND key_prefix = $1
@@ -109,7 +118,8 @@ impl<'a> ClientRepository<'a> {
             r#"
             SELECT id, name, description, key_prefix, api_key_hash,
                    allowed_models, rpm, burst, token_ttl_seconds,
-                   active, created_at, revoked_at
+                   active, created_at, revoked_at,
+                token_budget, budget_period, budget_reset_at
             FROM clients
             ORDER BY created_at ASC
             LIMIT $1 OFFSET $2
@@ -153,6 +163,126 @@ impl<'a> ClientRepository<'a> {
 
         Ok(row.0)
     }
+
+    /// Update budget settings for a client.
+    pub async fn update_budget(
+        &self,
+        id: Uuid,
+        token_budget: Option<i64>,
+        budget_period: Option<&str>,
+    ) -> Result<Client, RepoError> {
+        // When setting a budget for the first time, initialize budget_reset_at to now.
+        let client = sqlx::query_as::<_, Client>(
+            r#"
+            UPDATE clients
+            SET token_budget = $2,
+                budget_period = $3,
+                budget_reset_at = CASE
+                    WHEN $2 IS NOT NULL AND budget_reset_at IS NULL THEN now()
+                    WHEN $2 IS NULL THEN NULL
+                    ELSE budget_reset_at
+                END
+            WHERE id = $1
+            RETURNING id, name, description, key_prefix, api_key_hash,
+                      allowed_models, rpm, burst, token_ttl_seconds,
+                      active, created_at, revoked_at,
+                      token_budget, budget_period, budget_reset_at
+            "#,
+        )
+        .bind(id)
+        .bind(token_budget)
+        .bind(budget_period)
+        .fetch_optional(self.db)
+        .await
+        .map_err(RepoError::Database)?
+        .ok_or_else(|| RepoError::NotFound(format!("client {}", id)))?;
+
+        Ok(client)
+    }
+
+    /// Re-activate a previously revoked client and reset its budget period.
+    pub async fn reactivate(&self, id: Uuid) -> Result<(), RepoError> {
+        let rows = sqlx::query(
+            r#"
+            UPDATE clients
+            SET active = true, revoked_at = NULL, budget_reset_at = now()
+            WHERE id = $1 AND active = false
+            "#,
+        )
+        .bind(id)
+        .execute(self.db)
+        .await
+        .map_err(RepoError::Database)?
+        .rows_affected();
+
+        if rows == 0 {
+            Err(RepoError::NotFound(format!(
+                "client {} not found or already active",
+                id
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Find active clients that have a token budget and have exceeded it
+    /// based on usage since `budget_reset_at`.
+    pub async fn find_over_budget(&self) -> Result<Vec<OverBudgetClient>, RepoError> {
+        let rows = sqlx::query_as::<_, OverBudgetClient>(
+            r#"
+            SELECT c.id, c.name, c.token_budget, COALESCE(SUM(u.total_tokens::bigint), 0)::bigint AS tokens_used
+            FROM clients c
+            LEFT JOIN usage_log u ON u.client_id = c.id AND u.created_at >= c.budget_reset_at
+            WHERE c.active = true
+              AND c.token_budget IS NOT NULL
+              AND c.budget_reset_at IS NOT NULL
+            GROUP BY c.id, c.name, c.token_budget
+            HAVING COALESCE(SUM(u.total_tokens::bigint), 0) >= c.token_budget
+            "#,
+        )
+        .fetch_all(self.db)
+        .await
+        .map_err(RepoError::Database)?;
+
+        Ok(rows)
+    }
+
+    /// Reset `budget_reset_at` to the next period boundary for clients
+    /// whose current period has expired.
+    pub async fn reset_expired_budgets(&self) -> Result<u64, RepoError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE clients
+            SET budget_reset_at = CASE budget_period
+                WHEN 'daily' THEN budget_reset_at + INTERVAL '1 day'
+                WHEN 'monthly' THEN budget_reset_at + INTERVAL '1 month'
+                ELSE budget_reset_at
+            END
+            WHERE active = true
+              AND token_budget IS NOT NULL
+              AND budget_reset_at IS NOT NULL
+              AND budget_period IS NOT NULL
+              AND (
+                  (budget_period = 'daily' AND budget_reset_at + INTERVAL '1 day' <= now())
+                  OR (budget_period = 'monthly' AND budget_reset_at + INTERVAL '1 month' <= now())
+              )
+            "#,
+        )
+        .execute(self.db)
+        .await
+        .map_err(RepoError::Database)?;
+
+        Ok(result.rows_affected())
+    }
+}
+
+/// Result of the over-budget query.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OverBudgetClient {
+    pub id: Uuid,
+    pub name: String,
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
 }
 
 fn is_unique_violation(e: &sqlx::Error) -> bool {
@@ -179,6 +309,8 @@ mod tests {
                 100,
                 10,
                 600,
+                None,
+                None,
             )
             .await
             .expect("create should succeed");
@@ -199,7 +331,9 @@ mod tests {
         let repo = ClientRepository::new(&pool);
         let models = vec!["gpt-4".to_string(), "claude-3".to_string()];
         let client = repo
-            .create("m-test", None, "pfx12345", "h", &models, 10, 5, 300)
+            .create(
+                "m-test", None, "pfx12345", "h", &models, 10, 5, 300, None, None,
+            )
             .await
             .unwrap();
         assert_eq!(client.allowed_models, models);
@@ -217,6 +351,8 @@ mod tests {
             10,
             5,
             300,
+            None,
+            None,
         )
         .await
         .expect("first insert ok");
@@ -230,6 +366,8 @@ mod tests {
                 10,
                 5,
                 300,
+                None,
+                None,
             )
             .await
             .unwrap_err();
@@ -255,6 +393,8 @@ mod tests {
             10,
             5,
             300,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -282,6 +422,8 @@ mod tests {
                 10,
                 5,
                 300,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -306,6 +448,8 @@ mod tests {
                 10,
                 5,
                 300,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -327,6 +471,8 @@ mod tests {
                 10,
                 5,
                 300,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -351,6 +497,8 @@ mod tests {
                 10,
                 5,
                 300,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -375,12 +523,34 @@ mod tests {
         assert_eq!(repo.count_active().await.unwrap(), 0);
 
         let a = repo
-            .create("a", None, "pfx_a_01", "h", &["*".to_string()], 10, 5, 300)
+            .create(
+                "a",
+                None,
+                "pfx_a_01",
+                "h",
+                &["*".to_string()],
+                10,
+                5,
+                300,
+                None,
+                None,
+            )
             .await
             .unwrap();
-        repo.create("b", None, "pfx_b_01", "h2", &["*".to_string()], 10, 5, 300)
-            .await
-            .unwrap();
+        repo.create(
+            "b",
+            None,
+            "pfx_b_01",
+            "h2",
+            &["*".to_string()],
+            10,
+            5,
+            300,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(repo.count_active().await.unwrap(), 2);
         repo.revoke(a.id).await.unwrap();
