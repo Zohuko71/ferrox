@@ -12,6 +12,7 @@ providers:
   - name: openai
     type: openai
     api_key: "${OPENAI_API_KEY:-placeholder}"
+    base_url: "https://api.openai.com/v1"   # must include version; adapter appends /chat/completions
 
   - name: gemini
     type: gemini

@@ -124,7 +124,7 @@ For Bedrock, omit `api_key` and set `region`. Credentials come from the AWS cred
 | `name` | yes | Unique identifier used in model routing |
 | `type` | yes | Provider type: `anthropic`, `openai`, `gemini`, `bedrock` |
 | `api_key` | yes* | API key (*not required for Bedrock) |
-| `base_url` | no | Override the default endpoint |
+| `base_url` | no | Override the default endpoint. Must include the API version prefix (e.g. `https://api.openai.com/v1`). The adapter appends only `/chat/completions`. |
 | `region` | no | AWS region (Bedrock only) |
 | `timeouts` | no | Per-provider timeout overrides |
 | `retry` | no | Per-provider retry overrides |
